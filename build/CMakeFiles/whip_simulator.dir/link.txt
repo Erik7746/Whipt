@@ -1,1 +1,1 @@
-/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/whip_simulator.dir/link.d CMakeFiles/whip_simulator.dir/main.cpp.o -o whip_simulator  /usr/lib/libglfw.so.3.5 /usr/lib/libGLX.so /usr/lib/libOpenGL.so
+/usr/bin/c++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/whip_simulator.dir/link.d CMakeFiles/whip_simulator.dir/main.cpp.o "CMakeFiles/whip_simulator.dir/wlr-layer-shell-unstable-v1-protocol.c.o" -o whip_simulator  -lwayland-egl -lwayland-cursor -lwayland-client -lm -lEGL -lGL

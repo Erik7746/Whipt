@@ -153,6 +153,30 @@ main.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/whip_simulator.dir/build.make CMakeFiles/whip_simulator.dir/main.cpp.s
 .PHONY : main.cpp.s
 
+wlr-layer-shell-unstable-v1-protocol.o: wlr-layer-shell-unstable-v1-protocol.c.o
+.PHONY : wlr-layer-shell-unstable-v1-protocol.o
+
+# target to build an object file
+wlr-layer-shell-unstable-v1-protocol.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/whip_simulator.dir/build.make CMakeFiles/whip_simulator.dir/wlr-layer-shell-unstable-v1-protocol.c.o
+.PHONY : wlr-layer-shell-unstable-v1-protocol.c.o
+
+wlr-layer-shell-unstable-v1-protocol.i: wlr-layer-shell-unstable-v1-protocol.c.i
+.PHONY : wlr-layer-shell-unstable-v1-protocol.i
+
+# target to preprocess a source file
+wlr-layer-shell-unstable-v1-protocol.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/whip_simulator.dir/build.make CMakeFiles/whip_simulator.dir/wlr-layer-shell-unstable-v1-protocol.c.i
+.PHONY : wlr-layer-shell-unstable-v1-protocol.c.i
+
+wlr-layer-shell-unstable-v1-protocol.s: wlr-layer-shell-unstable-v1-protocol.c.s
+.PHONY : wlr-layer-shell-unstable-v1-protocol.s
+
+# target to generate assembly for a file
+wlr-layer-shell-unstable-v1-protocol.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/whip_simulator.dir/build.make CMakeFiles/whip_simulator.dir/wlr-layer-shell-unstable-v1-protocol.c.s
+.PHONY : wlr-layer-shell-unstable-v1-protocol.c.s
+
 # Help Target
 help:
 	@echo "The following are some of the valid targets for this Makefile:"
@@ -165,6 +189,9 @@ help:
 	@echo "... main.o"
 	@echo "... main.i"
 	@echo "... main.s"
+	@echo "... wlr-layer-shell-unstable-v1-protocol.o"
+	@echo "... wlr-layer-shell-unstable-v1-protocol.i"
+	@echo "... wlr-layer-shell-unstable-v1-protocol.s"
 .PHONY : help
 
 

@@ -1,0 +1,251 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="wlr_layer_shell_unstable_v1">
+  <copyright>
+    Copyright © 2017 Drew DeVault
+
+    Permission to use, copy, modify, distribute, and sell this
+    software and its documentation for any purpose is hereby granted
+    without fee, provided that the above copyright notice appear in
+    all copies and that both that copyright notice and this permission
+    notice appear in supporting documentation, and that the name of
+    the copyright holders not be used in advertising or publicity
+    pertaining to distribution of the software without specific,
+    written prior permission.  The copyright holders make no
+    representations about the suitability of this software for any
+    purpose.  It is provided "as is" without express or implied
+    warranty.
+
+    THE COPYRIGHT HOLDERS DISCLAIM ALL WARRANTIES WITH REGARD TO THIS
+    SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND
+    FITNESS, IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY
+    SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+    WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN
+    AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+    ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
+    THIS SOFTWARE.
+  </copyright>
+
+  <interface name="zwlr_layer_shell_v1" version="4">
+    <description summary="create surfaces that are layers of the desktop">
+      Clients can use this interface to assign the layer_surface role to
+      wl_surfaces. Such surfaces are assigned to a "layer" of the output and
+      rendered with a defined z-depth respective to each other. They may also be
+      anchored to the edges and corners of a screen and specify input handling
+      semantics. This interface should be suitable for the implementation of
+      many desktop shell components, and a broad number of other features that
+      overlay or place windows with respect to the desktop.
+    </description>
+
+    <request name="get_layer_surface">
+      <description summary="create a layer_surface from a surface">
+        Create a layer surface for an existing surface. This assigns the role of
+        layer_surface, or raises a protocol error if another role is already
+        assigned.
+
+        Creating a layer surface from a wl_surface which has a buffer attached
+        or committed is a client error, and any attempts by a client to attach
+        or manipulate a buffer prior to the first layer_surface.configure call
+        must also be treated as errors.
+
+        You may pass NULL for output to allow the compositor to decide which
+        output to use. Generally this will be the one that the user most
+        recently interacted with.
+
+        The provided surface must be visible as a top-level surface when the
+        role is assigned. Layer surfaces are not visible as toplevel surfaces,
+        so if the wl_surface is not a toplevel surface, it will be treated as a
+        client error.
+      </description>
+      <arg name="id" type="new_id" interface="zwlr_layer_surface_v1"/>
+      <arg name="surface" type="object" interface="wl_surface"/>
+      <arg name="output" type="object" interface="wl_output" allow-null="true"/>
+      <arg name="layer" type="uint" enum="layer"/>
+      <arg name="name_space" type="string"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the layer shell object">
+        This request indicates that the client will not use the layer shell
+        object any more. Objects that have been created through this instance
+        are not affected.
+      </description>
+    </request>
+
+    <enum name="error">
+      <entry name="role" value="0" summary="wl_surface has another role"/>
+      <entry name="invalid_layer" value="1" summary="layer value is invalid"/>
+      <entry name="already_constructed" value="2" summary="wl_surface has a buffer attached or committed"/>
+    </enum>
+
+    <enum name="layer">
+      <description summary="available layers for surfaces">
+        These values indicate which layers a surface can be rendered in. They
+        are ordered by z depth, bottom-most first. Traditional shell surfaces
+        will typically be rendered between the bottom and top layers.
+        Fullscreen shell surfaces are typically rendered at the top layer.
+        Popups and other user interface elements are typically at overlay. But
+        this is not guaranteed.
+      </description>
+      <entry name="background" value="0"/>
+      <entry name="bottom" value="1"/>
+      <entry name="top" value="2"/>
+      <entry name="overlay" value="3"/>
+    </enum>
+  </interface>
+
+  <interface name="zwlr_layer_surface_v1" version="4">
+    <description summary="layer metadata interface">
+      An interface that may be implemented by a wl_surface, for surfaces that
+      describe a layer surface.
+
+      This interface exposes requests and events relevant for describing and
+      positioning a layer surface.
+    </description>
+
+    <request name="set_size">
+      <description summary="sets the size of the surface">
+        Sets the size of the surface in surface-local coordinates. The
+        compositor will display the surface centered with respect to the
+        anchors.
+
+        If you pass 0 for either value, the compositor will assign it and
+        inform you of the assignment in the configure event. You must set your
+        anchor to opposite edges in the dimensions you omit; not doing so is a
+        protocol error. Both values are 0 by default.
+      </description>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+    </request>
+
+    <request name="set_anchor">
+      <description summary="configures the anchor point of the surface">
+        Requests that the compositor anchor the surface to the specified edges
+        and corners. If two orthogonal edges are specified (e.g. 'top' and
+        'left'), then the anchor point will be the intersection of the edges
+        (e.g. the top left corner of the output); if only one edge is
+        specified, then the anchor point will be centered on that edge.
+
+        A single edge or corner can be specified, but not both. Setting an
+        anchor point that does not touch any edge is a protocol error. Setting
+        two edges on the same axis is a protocol error.
+      </description>
+      <arg name="anchor" type="uint" enum="anchor"/>
+    </request>
+
+    <request name="set_exclusive_zone">
+      <description summary="configures the exclusive geometry of this surface">
+        Requests that the compositor avoids occluding an area of the surface
+        with other surfaces. This is primarily intended for surfaces using the
+        top or bottom layer, to reserve screen space. The compositor's usage
+        of this space is dependent on the value of set_anchor.
+
+        A positive value sets the size of the exclusive zone to the given
+        value in surface-local coordinates. A value of 0 requests the
+        compositor to not reserve any space. A value of -1 requests the
+        compositor to not occlude the surface with other surfaces.
+      </description>
+      <arg name="zone" type="int"/>
+    </request>
+
+    <request name="set_margin">
+      <description summary="sets a margin from the anchor point">
+        Requests that the surface be placed some distance away from the anchor
+        point, in surface-local coordinates.
+      </description>
+      <arg name="top" type="int"/>
+      <arg name="right" type="int"/>
+      <arg name="bottom" type="int"/>
+      <arg name="left" type="int"/>
+    </request>
+
+    <request name="set_keyboard_interactivity">
+      <description summary="requests keyboard events">
+        Set how keyboard events are requested for this surface.
+
+        The keyboard_interactivity value can be one of the following:
+
+        none: no keyboard events are requested. The compositor is free to not
+        forward keyboard events to the layer surface.
+
+        exclusive: exclusive keyboard focus. This asks the compositor to give
+        all keyboard events to this surface and not pass them on to any other
+        surface in the same seat.
+
+        on_demand: regular keyboard focus. The compositor will forward keyboard
+        events to the surface when it has keyboard focus.
+      </description>
+      <arg name="keyboard_interactivity" type="uint" enum="keyboard_interactivity"/>
+    </request>
+
+    <enum name="keyboard_interactivity">
+      <entry name="none" value="0"/>
+      <entry name="exclusive" value="1"/>
+      <entry name="on_demand" value="2" since="4"/>
+    </enum>
+
+    <request name="get_popup">
+      <description summary="assign this layer_surface as an xdg_popup parent">
+        This assigns an xdg_popup's parent to this layer_surface.  This popup
+        should have been created via xdg_surface::get_popup with the parent set
+        to NULL, and this request must be invoked before committing the popup's
+        surface state.
+      </description>
+      <arg name="popup" type="object" interface="xdg_popup"/>
+    </request>
+
+    <request name="ack_configure">
+      <description summary="acknowledge a configure event">
+        When a configure event is received, if a client commits the
+        surface in response to the configure event, the client must make an
+        ack_configure request sometime before the commit request, passing
+        along the serial of the configure event.
+
+        For instance, for configure events the compositor can use the serial
+        to let the client know which configure event its acking.
+      </description>
+      <arg name="serial" type="uint"/>
+    </request>
+
+    <request name="destroy" type="destructor">
+      <description summary="destroy the layer surface">
+        This request informs the compositor that the layer surface is to be
+        destroyed. The compositor is expected to hide the surface and then
+        send the wl_surface.unmap event.
+      </description>
+    </request>
+
+    <event name="configure">
+      <description summary="suggest a surface change">
+        The configure event asks the client to resize its surface.
+
+        Clients should arrange their surface for the new states, and then send
+        an ack_configure request with the serial sent in this configure event at
+        some point before committing the new surface.
+      </description>
+      <arg name="serial" type="uint"/>
+      <arg name="width" type="uint"/>
+      <arg name="height" type="uint"/>
+    </event>
+
+    <event name="closed">
+      <description summary="surface should be closed">
+        The closed event is sent by the compositor when it wants the surface
+        to be closed. The client should then destroy the surface.
+      </description>
+    </event>
+
+    <enum name="error">
+      <entry name="invalid_surface_state" value="0"/>
+      <entry name="invalid_size" value="1"/>
+      <entry name="invalid_anchor" value="2"/>
+      <entry name="invalid_keyboard_interactivity" value="3" since="4"/>
+    </enum>
+
+    <enum name="anchor">
+      <entry name="top" value="1"/>
+      <entry name="bottom" value="2"/>
+      <entry name="left" value="4"/>
+      <entry name="right" value="8"/>
+    </enum>
+  </interface>
+</protocol>

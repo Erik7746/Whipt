@@ -1,0 +1,2 @@
+# Hashes of file build rules.
+f9522ecb9077242b27be8c284ce0ca66 wlr-layer-shell-unstable-v1-client-protocol.h
