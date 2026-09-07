@@ -1,0 +1,58 @@
+# ============================================================================
+#  Gitignore para whip_simulator (C++ / CMake / Wayland / Windows)
+# ============================================================================
+
+# Directorio de compilación por defecto
+/build/
+/out/
+/cmake-build-*/
+
+# Archivos generados por CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+
+# Archivos de protocolo Wayland generados por wayland-scanner
+wlr-layer-shell-unstable-v1-client-protocol.h
+wlr-layer-shell-unstable-v1-protocol.c
+
+# Binarios y objetos
+*.exe
+*.out
+*.app
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dll
+*.dylib
+
+# Debug / symbols
+*.pdb
+*.ilk
+*.exp
+
+# IDEs y editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cache/
+
+# Sistemas operativos
+.DS_Store
+Thumbs.db
+.directory
+
+# Logs y temporales
+*.log
+*.tmp
+/tmp/
+
