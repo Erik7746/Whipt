@@ -34,12 +34,19 @@
     #ifdef _WIN32
         #include <windows.h>
         #include <mmsystem.h>
+        #define GLFW_EXPOSE_NATIVE_WIN32
+        #include <GLFW/glfw3native.h>
         #pragma comment(lib, "winmm.lib")
     #else
         #include <cstdlib>
         #include <unistd.h>
         #include <fcntl.h>
     #endif
+#endif
+
+// MinGW no define GL_MULTISAMPLE en algunas instalaciones.
+#ifndef GL_MULTISAMPLE
+#define GL_MULTISAMPLE 0x809D
 #endif
 
 #ifdef USE_WAYLAND_LAYER

@@ -64,11 +64,33 @@ if(NOT WIN32)
 #  Windows (GLFW)
 # ============================================================================
 else()
-    find_package(glfw3 3.3 REQUIRED)
-    find_package(OpenGL REQUIRED)
-
     add_executable(whip_simulator main.cpp)
-    target_link_libraries(whip_simulator PRIVATE glfw OpenGL::GL winmm)
+
+    # Permitir especificar una ruta custom de GLFW (útil para cross-compilar
+    # con MinGW desde Linux usando los binarios precompilados de GLFW).
+    if(DEFINED GLFW_ROOT)
+        target_include_directories(whip_simulator PRIVATE ${GLFW_ROOT}/include)
+
+        # Buscar la biblioteca estática en las ubicaciones típicas de los
+        # paquetes binarios de GLFW para MinGW / MSVC.
+        find_library(GLFW_LIBRARY
+            NAMES glfw3 glfw3dll libglfw3.a libglfw3dll.a
+            PATHS
+                ${GLFW_ROOT}/lib-mingw-w64
+                ${GLFW_ROOT}/lib-vc2022
+                ${GLFW_ROOT}/lib-vc2019
+                ${GLFW_ROOT}/lib
+            NO_DEFAULT_PATH
+            REQUIRED
+        )
+        target_link_libraries(whip_simulator PRIVATE ${GLFW_LIBRARY})
+    else()
+        find_package(glfw3 3.3 REQUIRED)
+        target_link_libraries(whip_simulator PRIVATE glfw)
+    endif()
+
+    # En Windows nativo o cross-compilado con MinGW, OpenGL se llama opengl32.
+    target_link_libraries(whip_simulator PRIVATE opengl32 winmm)
 
     if(MSVC)
         target_compile_options(whip_simulator PRIVATE /W4)

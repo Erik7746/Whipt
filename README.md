@@ -66,6 +66,57 @@ cmake --build build --config Release
 
 > Sustituye `C:\ruta\a\vcpkg` por la ubicación real de tu instalación de vcpkg.
 
+### Cross-compilar para Windows desde Linux (MinGW-w64)
+
+1. Instala el toolchain de MinGW-w64:
+
+   ```bash
+   # Arch Linux
+   sudo pacman -S mingw-w64-gcc
+
+   # Debian / Ubuntu
+   sudo apt install mingw-w64
+   ```
+
+2. Descarga los binarios de GLFW para MinGW desde la sección de releases de GLFW:
+   <https://github.com/glfw/glfw/releases>
+
+   Descomprime el archivo y coloca la carpeta renombrada como `deps/glfw-mingw` dentro del proyecto. La estructura debe quedar así:
+
+   ```
+   deps/glfw-mingw/
+   ├── include/GLFW/
+   │   ├── glfw3.h
+   │   └── glfw3native.h
+   └── lib-mingw-w64/
+       ├── libglfw3.a
+       ├── libglfw3dll.a
+       └── glfw3.dll
+   ```
+
+3. Compila con el toolchain file incluido:
+
+   ```bash
+   cmake -S . -B build-win \
+       -DCMAKE_TOOLCHAIN_FILE=mingw-w64-toolchain.cmake \
+       -DGLFW_ROOT=$PWD/deps/glfw-mingw \
+       -DCMAKE_BUILD_TYPE=Release
+   cmake --build build-win -j
+   ```
+
+4. El `.exe` estará en:
+
+   ```
+   build-win/whip_simulator.exe
+   ```
+
+5. Para ejecutarlo en Windows, copia junto al `.exe`:
+   - `glfw3.dll` (de `deps/glfw-mingw/lib-mingw-w64/`)
+   - Las DLLs de runtime de MinGW (localízalas con `x86_64-w64-mingw32-g++ -print-file-name=libgcc_s_seh-1.dll` y similares):
+     - `libgcc_s_seh-1.dll`
+     - `libstdc++-6.dll`
+     - `libwinpthread-1.dll`
+
 ---
 
 ## Ejecución
