@@ -1,25 +1,15 @@
 /*
- * ============================================================================
- *  LÁTIGO INTERACTIVO EN TIEMPO REAL  (C++ / OpenGL)
- * ============================================================================
- *  Simula un látigo mediante una cadena de nodos con física de Verlet.
- *
- *  Plataformas:
- *    - Linux / Hyprland : usa Wayland layer-shell (capa OVERLAY real).
- *    - Windows 10/11    : usa GLFW con ventana transparente y estilos nativos.
- *
- *  El archivo de sonido "crack.wav" debe estar en el directorio de trabajo.
- * ============================================================================
+ * Látigo interactivo (C++ / OpenGL)
+ * Linux/Hyprland : capa Wayland real (layer-shell OVERLAY).
+ * Windows        : ventana GLFW transparente con WS_EX_TOPMOST.
  */
 
-// ------------------------------- Plataforma ---------------------------------
 #ifdef _WIN32
     #define USE_GLFW
 #else
     #define USE_WAYLAND_LAYER
 #endif
 
-// ------------------------------- Includes -----------------------------------
 #include <vector>
 #include <cmath>
 #include <cstdio>
@@ -44,7 +34,6 @@
     #endif
 #endif
 
-// MinGW no define GL_MULTISAMPLE en algunas instalaciones.
 #ifndef GL_MULTISAMPLE
 #define GL_MULTISAMPLE 0x809D
 #endif
@@ -62,24 +51,19 @@
     #include <ctime>
     #include "wlr-layer-shell-unstable-v1-client-protocol.h"
 
-    // Stub: el protocolo generado referencia xdg_popup_interface por el
-    // request get_popup, pero nunca lo usamos.
     extern "C" const struct wl_interface xdg_popup_interface = {
         "xdg_popup", 3, 0, nullptr, 0, nullptr
     };
 #endif
 
 // ---------------------------------------------------------------------------
-//  PARÁMETROS DEL MANGO
+//  Constantes
 // ---------------------------------------------------------------------------
 static const float HANDLE_LEN      = 55.0f;
 static const float HANDLE_WIDTH    = 14.0f;
 static const float HANDLE_ANGLE    = -75.0f * 3.14159265f / 180.0f;
 static const float HANDLE_CORNER_R =  5.0f;
 
-// ---------------------------------------------------------------------------
-//  PARÁMETROS DE LA SIMULACIÓN FÍSICA
-// ---------------------------------------------------------------------------
 static const int   NUM_SEGMENTS          = 45;
 static const int   NUM_NODES             = NUM_SEGMENTS + 1;
 static const float SEGMENT_LENGTH_FLEX   = 9.0f;
@@ -90,39 +74,30 @@ static const float DAMPING               = 0.985f;
 static const float DAMPING_RIGID         = 0.92f;
 static const int   CONSTRAINT_ITERATIONS = 18;
 
+static const float CRACK_THRESHOLD = 3500.0f;
+static const float CRACK_COOLDOWN  = 0.25f;
+
 static inline float getSegmentLength(int segIndex) {
     return (segIndex < RIGID_SEGMENTS) ? SEGMENT_LENGTH_RIGID : SEGMENT_LENGTH_FLEX;
 }
 
 // ---------------------------------------------------------------------------
-//  PARÁMETROS DEL "CHASQUIDO"
+//  Tipos y estado global
 // ---------------------------------------------------------------------------
-static const float CRACK_THRESHOLD = 3500.0f;
-static const float CRACK_COOLDOWN  = 0.25f;
+struct Vec2 { float x = 0.0f, y = 0.0f; };
 
-// ---------------------------------------------------------------------------
-//  Estructura de un nodo.
-// ---------------------------------------------------------------------------
-struct Vec2 {
-    float x = 0.0f;
-    float y = 0.0f;
-};
+static int   g_screenW  = 1920;
+static int   g_screenH  = 1080;
+static float g_mouseX   = 0.0f;
+static float g_mouseY   = 0.0f;
+static bool  g_dragging = false;
 
-// ---------------------------------------------------------------------------
-//  Estado global compartido (tamaño de pantalla / ratón).
-// ---------------------------------------------------------------------------
-static int   g_screenW     = 1920;
-static int   g_screenH     = 1080;
-static float g_mouseX      = 0.0f;
-static float g_mouseY      = 0.0f;
-static bool  g_dragging    = false;
-
-// Posiciones más recientes del látigo y del mango (para detección de clicks).
+// Hit-test (compartido entre plataformas)
 static std::vector<Vec2> g_whipPos;
 static Vec2              g_handleGrip;
 
 // ---------------------------------------------------------------------------
-//  GENERADOR DE WAV DE PRUEBA
+//  Audio
 // ---------------------------------------------------------------------------
 #pragma pack(push, 1)
 struct WavHeader {
@@ -144,16 +119,13 @@ struct WavHeader {
 
 static void generateTestWav(const std::string& filename) {
     const uint32_t sampleRate = 44100;
-    const float    duration   = 0.25f;
-    const float    frequency  = 1200.0f;
-    const uint32_t numSamples = static_cast<uint32_t>(sampleRate * duration);
+    const uint32_t numSamples = static_cast<uint32_t>(sampleRate * 0.25f);
 
     std::vector<int16_t> samples(numSamples);
     for (uint32_t i = 0; i < numSamples; ++i) {
-        float t = static_cast<float>(i) / static_cast<float>(sampleRate);
-        float envelope = std::exp(-t * 20.0f);
-        float value = std::sin(6.283185307f * frequency * t) * envelope;
-        samples[i] = static_cast<int16_t>(value * 28000.0f);
+        float t = static_cast<float>(i) / sampleRate;
+        float v = std::sin(6.283185307f * 1200.0f * t) * std::exp(-t * 20.0f);
+        samples[i] = static_cast<int16_t>(v * 28000.0f);
     }
 
     WavHeader hdr;
@@ -164,12 +136,8 @@ static void generateTestWav(const std::string& filename) {
     if (!out) return;
     out.write(reinterpret_cast<const char*>(&hdr), sizeof(hdr));
     out.write(reinterpret_cast<const char*>(samples.data()), hdr.dataSize);
-    out.close();
 }
 
-// ---------------------------------------------------------------------------
-//  AUDIO
-// ---------------------------------------------------------------------------
 #ifndef _WIN32
 static std::string g_linuxAudioPlayer;
 
@@ -181,13 +149,12 @@ static void initLinuxAudio() {
     } else if (std::system("which aplay >/dev/null 2>&1") == 0) {
         g_linuxAudioPlayer = "aplay";
     } else {
-        std::fprintf(stderr, "Aviso: no se encontró pw-play, paplay ni aplay.\n");
         g_linuxAudioPlayer.clear();
     }
 }
 #endif
 
-void playWhipSound() {
+static void playWhipSound() {
 #ifdef _WIN32
     PlaySound(TEXT("crack.wav"), nullptr, SND_FILENAME | SND_ASYNC);
 #else
@@ -214,26 +181,26 @@ void playWhipSound() {
 }
 
 // ---------------------------------------------------------------------------
-//  FÍSICA
+//  Física
 // ---------------------------------------------------------------------------
 static void initWhip(std::vector<Vec2>& pos, std::vector<Vec2>& prev) {
     pos.resize(NUM_NODES);
     prev.resize(NUM_NODES);
 
-    float grip_x = static_cast<float>(g_screenW) * 0.5f;
-    float grip_y = static_cast<float>(g_screenH) * 0.25f;
+    float gripX = g_screenW * 0.5f;
+    float gripY = g_screenH * 0.25f;
 
-    pos[0].x = grip_x + HANDLE_LEN * std::cos(HANDLE_ANGLE);
-    pos[0].y = grip_y + HANDLE_LEN * std::sin(HANDLE_ANGLE);
+    pos[0].x = gripX + HANDLE_LEN * std::cos(HANDLE_ANGLE);
+    pos[0].y = gripY + HANDLE_LEN * std::sin(HANDLE_ANGLE);
 
     float baseAngle = HANDLE_ANGLE + 1.57079633f;
 
     for (int i = 1; i < NUM_NODES; ++i) {
-        float len = getSegmentLength(i - 1);
-        float t = static_cast<float>(i) * 0.25f;
+        float len  = getSegmentLength(i - 1);
+        float t    = i * 0.25f;
         float curveX = 18.0f * std::exp(-t);
         float localAngle = baseAngle + (1.57079633f - baseAngle) *
-                           (1.0f - std::exp(-static_cast<float>(i) * 0.18f));
+                           (1.0f - std::exp(-i * 0.18f));
 
         pos[i].x = pos[i - 1].x + std::cos(localAngle) * len + curveX * 0.08f;
         pos[i].y = pos[i - 1].y + std::sin(localAngle) * len;
@@ -242,16 +209,12 @@ static void initWhip(std::vector<Vec2>& pos, std::vector<Vec2>& prev) {
     prev = pos;
 }
 
-static void verletStep(std::vector<Vec2>& pos,
-                       std::vector<Vec2>& prev,
-                       float dt) {
+static void verletStep(std::vector<Vec2>& pos, std::vector<Vec2>& prev, float dt) {
     const float dt2 = dt * dt;
-
     for (int i = 1; i < NUM_NODES; ++i) {
-        float damping = (i <= RIGID_SEGMENTS) ? DAMPING_RIGID : DAMPING;
-        float vx = (pos[i].x - prev[i].x) * damping;
-        float vy = (pos[i].y - prev[i].y) * damping;
-
+        float damp = (i <= RIGID_SEGMENTS) ? DAMPING_RIGID : DAMPING;
+        float vx = (pos[i].x - prev[i].x) * damp;
+        float vy = (pos[i].y - prev[i].y) * damp;
         prev[i] = pos[i];
         pos[i].x += vx;
         pos[i].y += vy + GRAVITY * dt2;
@@ -262,7 +225,6 @@ static void constrainDistance(Vec2& a, Vec2& b, float restLength) {
     float dx = b.x - a.x;
     float dy = b.y - a.y;
     float dist = std::sqrt(dx * dx + dy * dy);
-
     if (dist < 1e-4f) dist = 1e-4f;
 
     float correction = (dist - restLength) / dist;
@@ -281,15 +243,11 @@ static void solveConstraints(std::vector<Vec2>& pos) {
     }
 }
 
-static void updatePhysics(std::vector<Vec2>& pos,
-                          std::vector<Vec2>& prev,
-                          const Vec2& mouse,
-                          bool dragging,
-                          float dt) {
+static void updatePhysics(std::vector<Vec2>& pos, std::vector<Vec2>& prev,
+                          const Vec2& mouse, bool dragging, float dt) {
     if (dragging) {
-        Vec2 tip;
-        tip.x = mouse.x + HANDLE_LEN * std::cos(HANDLE_ANGLE);
-        tip.y = mouse.y + HANDLE_LEN * std::sin(HANDLE_ANGLE);
+        Vec2 tip{ mouse.x + HANDLE_LEN * std::cos(HANDLE_ANGLE),
+                  mouse.y + HANDLE_LEN * std::sin(HANDLE_ANGLE) };
         prev[0] = tip;
         pos[0]  = tip;
     } else {
@@ -309,9 +267,7 @@ static void updatePhysics(std::vector<Vec2>& pos,
 
 static void detectCrack(const std::vector<Vec2>& pos,
                         const std::vector<Vec2>& prev,
-                        float dt,
-                        float& cooldownTimer,
-                        bool& armed) {
+                        float dt, float& cooldown, bool& armed) {
     const Vec2& tip = pos[NUM_NODES - 1];
     const Vec2& tipPrev = prev[NUM_NODES - 1];
 
@@ -319,158 +275,113 @@ static void detectCrack(const std::vector<Vec2>& pos,
     float vy = (tip.y - tipPrev.y) / dt;
     float speed = std::sqrt(vx * vx + vy * vy);
 
-    cooldownTimer -= dt;
+    cooldown -= dt;
 
-    if (!armed && speed < CRACK_THRESHOLD * 0.5f) {
-        armed = true;
-    }
-
-    if (armed && speed >= CRACK_THRESHOLD && cooldownTimer <= 0.0f) {
+    if (!armed && speed < CRACK_THRESHOLD * 0.5f) armed = true;
+    if (armed && speed >= CRACK_THRESHOLD && cooldown <= 0.0f) {
         playWhipSound();
-        cooldownTimer = CRACK_COOLDOWN;
+        cooldown = CRACK_COOLDOWN;
         armed = false;
     }
 }
 
 // ---------------------------------------------------------------------------
-//  RENDERIZADO
+//  Renderizado
 // ---------------------------------------------------------------------------
 static void renderWhip(const std::vector<Vec2>& pos) {
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
     glLineWidth(6.0f);
     glBegin(GL_LINE_STRIP);
-    for (int i = 0; i < NUM_NODES; ++i) {
-        glVertex2f(pos[i].x, pos[i].y);
-    }
+    for (const auto& p : pos) glVertex2f(p.x, p.y);
     glEnd();
 
     glColor4f(0.0f, 0.0f, 0.0f, 1.0f);
     glLineWidth(4.0f);
     glBegin(GL_LINE_STRIP);
-    for (int i = 0; i < NUM_NODES; ++i) {
-        glVertex2f(pos[i].x, pos[i].y);
-    }
+    for (const auto& p : pos) glVertex2f(p.x, p.y);
     glEnd();
 }
 
 static void renderHandle(const Vec2& grip) {
     static const int ARC_SEGS = 6;
-
     float L = HANDLE_LEN;
     float W = HANDLE_WIDTH;
     float r = std::min(HANDLE_CORNER_R, std::min(W * 0.5f, L * 0.5f));
-
     float ca = std::cos(HANDLE_ANGLE);
     float sa = std::sin(HANDLE_ANGLE);
 
     auto toWorld = [&](float lx, float ly) -> Vec2 {
-        Vec2 v;
-        v.x = grip.x + (lx * ca - ly * sa);
-        v.y = grip.y + (lx * sa + ly * ca);
-        return v;
+        return Vec2{ grip.x + (lx * ca - ly * sa),
+                     grip.y + (lx * sa + ly * ca) };
     };
 
     std::vector<Vec2> outline;
+    auto arc = [&](float cx, float cy, float startA, float endA) {
+        for (int i = 0; i <= ARC_SEGS; ++i) {
+            float t = static_cast<float>(i) / ARC_SEGS;
+            float a = startA + (endA - startA) * t;
+            outline.push_back(toWorld(cx + r * std::cos(a),
+                                      cy + r * std::sin(a)));
+        }
+    };
 
-    for (int i = 0; i <= ARC_SEGS; ++i) {
-        float t = static_cast<float>(i) / ARC_SEGS;
-        float a = 3.14159265f - t * 1.57079633f;
-        outline.push_back(toWorld(r + r * std::cos(a),
-                                  (W * 0.5f - r) + r * std::sin(a)));
-    }
-
+    arc(r,  W * 0.5f - r, 3.14159265f, 1.57079633f);
     outline.push_back(toWorld(L - r, W * 0.5f));
-
-    for (int i = 0; i <= ARC_SEGS; ++i) {
-        float t = static_cast<float>(i) / ARC_SEGS;
-        float a = 1.57079633f * (1.0f - t);
-        outline.push_back(toWorld((L - r) + r * std::cos(a),
-                                  (W * 0.5f - r) + r * std::sin(a)));
-    }
-
-    outline.push_back(toWorld(L, W * 0.5f - r));
+    arc(L - r, W * 0.5f - r, 1.57079633f, 0.0f);
     outline.push_back(toWorld(L, -(W * 0.5f - r)));
-
-    for (int i = 0; i <= ARC_SEGS; ++i) {
-        float t = static_cast<float>(i) / ARC_SEGS;
-        float a = -1.57079633f * t;
-        outline.push_back(toWorld((L - r) + r * std::cos(a),
-                                  -(W * 0.5f - r) + r * std::sin(a)));
-    }
-
+    arc(L - r, -(W * 0.5f - r), 0.0f, -1.57079633f);
     outline.push_back(toWorld(r, -W * 0.5f));
-
-    for (int i = 0; i <= ARC_SEGS; ++i) {
-        float t = static_cast<float>(i) / ARC_SEGS;
-        float a = -1.57079633f - 1.57079633f * t;
-        outline.push_back(toWorld(r + r * std::cos(a),
-                                  -(W * 0.5f - r) + r * std::sin(a)));
-    }
+    arc(r, -(W * 0.5f - r), -1.57079633f, -3.14159265f);
 
     glColor4f(0.0f, 0.0f, 0.0f, 1.0f);
     glBegin(GL_POLYGON);
-    for (const auto& v : outline) {
-        glVertex2f(v.x, v.y);
-    }
+    for (const auto& v : outline) glVertex2f(v.x, v.y);
     glEnd();
 
     glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
     glLineWidth(1.5f);
     glBegin(GL_LINE_LOOP);
-    for (const auto& v : outline) {
-        glVertex2f(v.x, v.y);
-    }
+    for (const auto& v : outline) glVertex2f(v.x, v.y);
     glEnd();
 }
 
 // ---------------------------------------------------------------------------
-//  DETECCIÓN DE CLICK SOBRE EL OBJETO
-//  El látigo solo se agarra si se pulsa directamente sobre él o sobre el mango.
+//  Hit-test
 // ---------------------------------------------------------------------------
-static float pointSegmentDistance(float px, float py,
-                                  float ax, float ay,
+static float pointSegmentDistance(float px, float py, float ax, float ay,
                                   float bx, float by) {
-    float abx = bx - ax;
-    float aby = by - ay;
-    float apx = px - ax;
-    float apy = py - ay;
+    float abx = bx - ax, aby = by - ay;
+    float apx = px - ax, apy = py - ay;
     float ab2 = abx * abx + aby * aby;
     float t = (ab2 > 1e-8f) ? (apx * abx + apy * aby) / ab2 : 0.0f;
     t = std::max(0.0f, std::min(1.0f, t));
-    float cx = ax + t * abx;
-    float cy = ay + t * aby;
-    float dx = px - cx;
-    float dy = py - cy;
+    float cx = ax + t * abx, cy = ay + t * aby;
+    float dx = px - cx, dy = py - cy;
     return std::sqrt(dx * dx + dy * dy);
 }
 
 static bool isMouseOverObject(float x, float y) {
     if (g_whipPos.empty()) return false;
 
-    // Distancia al látigo (umbral generoso para facilitar el agarre).
     for (size_t i = 0; i + 1 < g_whipPos.size(); ++i) {
-        float d = pointSegmentDistance(x, y,
-                                       g_whipPos[i].x, g_whipPos[i].y,
-                                       g_whipPos[i + 1].x, g_whipPos[i + 1].y);
-        if (d < 28.0f) return true;
+        if (pointSegmentDistance(x, y, g_whipPos[i].x, g_whipPos[i].y,
+                                 g_whipPos[i + 1].x, g_whipPos[i + 1].y) < 28.0f)
+            return true;
     }
 
-    // Distancia al eje del mango.
-    Vec2 tip;
-    tip.x = g_handleGrip.x + HANDLE_LEN * std::cos(HANDLE_ANGLE);
-    tip.y = g_handleGrip.y + HANDLE_LEN * std::sin(HANDLE_ANGLE);
-    float dHandle = pointSegmentDistance(x, y,
-                                         g_handleGrip.x, g_handleGrip.y,
-                                         tip.x, tip.y);
-    if (dHandle < (HANDLE_WIDTH * 0.5f + 18.0f)) return true;
+    Vec2 tip{ g_handleGrip.x + HANDLE_LEN * std::cos(HANDLE_ANGLE),
+              g_handleGrip.y + HANDLE_LEN * std::sin(HANDLE_ANGLE) };
+    if (pointSegmentDistance(x, y, g_handleGrip.x, g_handleGrip.y,
+                             tip.x, tip.y) < (HANDLE_WIDTH * 0.5f + 18.0f))
+        return true;
 
     return false;
 }
 
 // ---------------------------------------------------------------------------
-//  CONFIGURACIÓN COMÚN DE OPENGL
+//  OpenGL
 // ---------------------------------------------------------------------------
-static void setup_gl_state() {
+static void setupGL() {
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -485,8 +396,17 @@ static void setup_gl_state() {
     glLoadIdentity();
 }
 
+// ---------------------------------------------------------------------------
+//  Utilidad: calcular grip según estado de arrastre
+// ---------------------------------------------------------------------------
+static Vec2 computeGrip(const Vec2& mouse, const Vec2& tipPos, bool dragging) {
+    if (dragging) return mouse;
+    return Vec2{ tipPos.x - HANDLE_LEN * std::cos(HANDLE_ANGLE),
+                 tipPos.y - HANDLE_LEN * std::sin(HANDLE_ANGLE) };
+}
+
 // ===========================================================================
-//  PLATAFORMA: WAYLAND LAYER-SHELL (Linux / Hyprland)
+//  Linux / Hyprland (Wayland layer-shell)
 // ===========================================================================
 #ifdef USE_WAYLAND_LAYER
 
@@ -520,22 +440,17 @@ struct WaylandState {
 
 static WaylandState g_wl;
 
-// ---- Registry listener ----------------------------------------------------
-static void registry_global(void* data, wl_registry* registry,
-                            uint32_t id, const char* interface, uint32_t version) {
-    (void)version;
+static void registryGlobal(void* data, wl_registry* registry,
+                           uint32_t id, const char* interface, uint32_t /*version*/) {
     WaylandState* s = static_cast<WaylandState*>(data);
     if (std::strcmp(interface, wl_compositor_interface.name) == 0) {
         s->compositor = static_cast<wl_compositor*>(
             wl_registry_bind(registry, id, &wl_compositor_interface, 4));
     } else if (std::strcmp(interface, wl_shm_interface.name) == 0) {
-        s->shm = static_cast<wl_shm*>(
-            wl_registry_bind(registry, id, &wl_shm_interface, 1));
+        s->shm = static_cast<wl_shm*>(wl_registry_bind(registry, id, &wl_shm_interface, 1));
     } else if (std::strcmp(interface, wl_output_interface.name) == 0) {
-        if (!s->output) {
-            s->output = static_cast<wl_output*>(
-                wl_registry_bind(registry, id, &wl_output_interface, 2));
-        }
+        if (!s->output) s->output = static_cast<wl_output*>(
+            wl_registry_bind(registry, id, &wl_output_interface, 2));
     } else if (std::strcmp(interface, wl_seat_interface.name) == 0) {
         s->seat = static_cast<wl_seat*>(
             wl_registry_bind(registry, id, &wl_seat_interface, 5));
@@ -545,19 +460,11 @@ static void registry_global(void* data, wl_registry* registry,
     }
 }
 
-static void registry_global_remove(void*, wl_registry*, uint32_t) {}
+static void registryGlobalRemove(void*, wl_registry*, uint32_t) {}
+static const wl_registry_listener registry_listener = { registryGlobal, registryGlobalRemove };
 
-static const wl_registry_listener registry_listener = {
-    registry_global,
-    registry_global_remove
-};
-
-// ---- Layer surface listener -----------------------------------------------
-static void layer_surface_configure(void* data,
-                                    zwlr_layer_surface_v1* /*surface*/,
-                                    uint32_t serial,
-                                    uint32_t width,
-                                    uint32_t height) {
+static void layerConfigure(void* data, zwlr_layer_surface_v1*, uint32_t serial,
+                           uint32_t width, uint32_t height) {
     WaylandState* s = static_cast<WaylandState*>(data);
     s->pending_w = static_cast<int>(width);
     s->pending_h = static_cast<int>(height);
@@ -565,24 +472,17 @@ static void layer_surface_configure(void* data,
     s->configured = true;
 }
 
-static void layer_surface_closed(void* data,
-                                 zwlr_layer_surface_v1* /*surface*/) {
-    WaylandState* s = static_cast<WaylandState*>(data);
-    s->closed = true;
+static void layerClosed(void* data, zwlr_layer_surface_v1*) {
+    static_cast<WaylandState*>(data)->closed = true;
 }
 
-static const zwlr_layer_surface_v1_listener layer_surface_listener = {
-    layer_surface_configure,
-    layer_surface_closed
-};
+static const zwlr_layer_surface_v1_listener layer_listener = { layerConfigure, layerClosed };
 
-// ---- Pointer listener -----------------------------------------------------
-static void set_wayland_cursor(WaylandState* s, uint32_t serial) {
+static void setCursor(WaylandState* s, uint32_t serial) {
     if (!s->cursor || !s->cursor_surface || s->cursor->image_count == 0) return;
     wl_cursor_image* image = s->cursor->images[0];
     wl_buffer* buffer = wl_cursor_image_get_buffer(image);
     if (!buffer) return;
-
     wl_pointer_set_cursor(s->pointer, serial, s->cursor_surface,
                           image->hotspot_x, image->hotspot_y);
     wl_surface_attach(s->cursor_surface, buffer, 0, 0);
@@ -590,240 +490,133 @@ static void set_wayland_cursor(WaylandState* s, uint32_t serial) {
     wl_surface_commit(s->cursor_surface);
 }
 
-static void pointer_enter(void* data,
-                          wl_pointer* /*pointer*/,
-                          uint32_t serial,
-                          wl_surface* /*surface*/,
-                          wl_fixed_t sx,
-                          wl_fixed_t sy) {
+static void pointerEnter(void* data, wl_pointer*, uint32_t serial,
+                         wl_surface*, wl_fixed_t sx, wl_fixed_t sy) {
     WaylandState* s = static_cast<WaylandState*>(data);
     s->pointer_serial = serial;
     g_mouseX = wl_fixed_to_double(sx);
     g_mouseY = wl_fixed_to_double(sy);
-    set_wayland_cursor(s, serial);
+    setCursor(s, serial);
 }
 
-static void pointer_leave(void* /*data*/,
-                          wl_pointer* /*pointer*/,
-                          uint32_t /*serial*/,
-                          wl_surface* /*surface*/) {}
+static void pointerLeave(void*, wl_pointer*, uint32_t, wl_surface*) {}
 
-static void pointer_motion(void* data,
-                           wl_pointer* /*pointer*/,
-                           uint32_t /*time*/,
-                           wl_fixed_t sx,
-                           wl_fixed_t sy) {
+static void pointerMotion(void* data, wl_pointer*, uint32_t,
+                          wl_fixed_t sx, wl_fixed_t sy) {
     WaylandState* s = static_cast<WaylandState*>(data);
     g_mouseX = wl_fixed_to_double(sx);
     g_mouseY = wl_fixed_to_double(sy);
-    // Reafirmar el cursor periódicamente por si el compositor lo pierde.
-    set_wayland_cursor(s, s->pointer_serial);
+    setCursor(s, s->pointer_serial);
 }
 
-static void pointer_button(void* /*data*/,
-                           wl_pointer* /*pointer*/,
-                           uint32_t /*serial*/,
-                           uint32_t /*time*/,
-                           uint32_t button,
-                           uint32_t state) {
-    if (button == 272) { // BTN_LEFT
-        if (state == 1) {
-            // Solo iniciar arrastre si el cursor está sobre el objeto.
-            g_dragging = isMouseOverObject(g_mouseX, g_mouseY);
-        } else {
-            g_dragging = false;
-        }
+static void pointerButton(void*, wl_pointer*, uint32_t, uint32_t,
+                          uint32_t button, uint32_t state) {
+    if (button == 272) {
+        if (state == 1) g_dragging = isMouseOverObject(g_mouseX, g_mouseY);
+        else            g_dragging = false;
     }
 }
 
-static void pointer_axis(void* /*data*/,
-                         wl_pointer* /*pointer*/,
-                         uint32_t /*time*/,
-                         uint32_t /*axis*/,
-                         wl_fixed_t /*value*/) {}
-
-static void pointer_frame(void* /*data*/, wl_pointer* /*pointer*/) {}
-
-static void pointer_axis_source(void* /*data*/, wl_pointer* /*pointer*/,
-                                uint32_t /*axis_source*/) {}
-
-static void pointer_axis_stop(void* /*data*/, wl_pointer* /*pointer*/,
-                              uint32_t /*time*/, uint32_t /*axis*/) {}
-
-static void pointer_axis_discrete(void* /*data*/, wl_pointer* /*pointer*/,
-                                  uint32_t /*axis*/, int32_t /*discrete*/) {}
-
-static void pointer_axis_value120(void* /*data*/, wl_pointer* /*pointer*/,
-                                  uint32_t /*axis*/, int32_t /*value120*/) {}
-
-static void pointer_axis_relative_direction(void* /*data*/, wl_pointer* /*pointer*/,
-                                            uint32_t /*axis*/, uint32_t /*direction*/) {}
+static void pointerAxis(void*, wl_pointer*, uint32_t, uint32_t, wl_fixed_t) {}
+static void pointerFrame(void*, wl_pointer*) {}
+static void pointerAxisSource(void*, wl_pointer*, uint32_t) {}
+static void pointerAxisStop(void*, wl_pointer*, uint32_t, uint32_t) {}
+static void pointerAxisDiscrete(void*, wl_pointer*, uint32_t, int32_t) {}
+static void pointerAxisValue120(void*, wl_pointer*, uint32_t, int32_t) {}
+static void pointerAxisRelDir(void*, wl_pointer*, uint32_t, uint32_t) {}
 
 static const wl_pointer_listener pointer_listener = {
-    pointer_enter,
-    pointer_leave,
-    pointer_motion,
-    pointer_button,
-    pointer_axis,
-    pointer_frame,
-    pointer_axis_source,
-    pointer_axis_stop,
-    pointer_axis_discrete,
-    pointer_axis_value120,
-    pointer_axis_relative_direction
+    pointerEnter, pointerLeave, pointerMotion, pointerButton,
+    pointerAxis, pointerFrame, pointerAxisSource, pointerAxisStop,
+    pointerAxisDiscrete, pointerAxisValue120, pointerAxisRelDir
 };
 
-// ---- Seat listener --------------------------------------------------------
-static void seat_capabilities(void* data, wl_seat* seat, uint32_t caps) {
+static void seatCapabilities(void* data, wl_seat* seat, uint32_t caps) {
     WaylandState* s = static_cast<WaylandState*>(data);
-    if (caps & WL_SEAT_CAPABILITY_POINTER) {
-        if (!s->pointer) {
-            s->pointer = wl_seat_get_pointer(seat);
-            wl_pointer_add_listener(s->pointer, &pointer_listener, s);
-        }
+    if ((caps & WL_SEAT_CAPABILITY_POINTER) && !s->pointer) {
+        s->pointer = wl_seat_get_pointer(seat);
+        wl_pointer_add_listener(s->pointer, &pointer_listener, s);
     }
 }
 
-static void seat_name(void* /*data*/, wl_seat* /*seat*/, const char* /*name*/) {}
+static void seatName(void*, wl_seat*, const char*) {}
+static const wl_seat_listener seat_listener = { seatCapabilities, seatName };
 
-static const wl_seat_listener seat_listener = {
-    seat_capabilities,
-    seat_name
-};
-
-// ---- EGL helpers ----------------------------------------------------------
-static bool init_egl(WaylandState* s, int width, int height) {
+static bool initEGL(WaylandState* s, int width, int height) {
     eglBindAPI(EGL_OPENGL_API);
-
     s->egl_display = eglGetDisplay(s->display);
-    if (s->egl_display == EGL_NO_DISPLAY) {
-        std::fprintf(stderr, "Error: eglGetDisplay falló.\n");
-        return false;
-    }
+    if (s->egl_display == EGL_NO_DISPLAY) return false;
 
     EGLint major, minor;
-    if (!eglInitialize(s->egl_display, &major, &minor)) {
-        std::fprintf(stderr, "Error: eglInitialize falló.\n");
-        return false;
-    }
+    if (!eglInitialize(s->egl_display, &major, &minor)) return false;
 
     EGLint attribs[] = {
         EGL_SURFACE_TYPE, EGL_WINDOW_BIT,
         EGL_RENDERABLE_TYPE, EGL_OPENGL_BIT,
-        EGL_RED_SIZE, 8,
-        EGL_GREEN_SIZE, 8,
-        EGL_BLUE_SIZE, 8,
-        EGL_ALPHA_SIZE, 8,
+        EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
         EGL_NONE
     };
-
     EGLConfig config;
-    EGLint num_configs;
-    if (!eglChooseConfig(s->egl_display, attribs, &config, 1, &num_configs) ||
-        num_configs == 0) {
-        std::fprintf(stderr, "Error: eglChooseConfig falló.\n");
+    EGLint num;
+    if (!eglChooseConfig(s->egl_display, attribs, &config, 1, &num) || num == 0)
         return false;
-    }
 
-    EGLint ctx_attribs[] = {
-        EGL_CONTEXT_MAJOR_VERSION, 2,
-        EGL_CONTEXT_MINOR_VERSION, 1,
-        EGL_NONE
-    };
-
-    s->egl_context = eglCreateContext(s->egl_display, config,
-                                      EGL_NO_CONTEXT, ctx_attribs);
-    if (s->egl_context == EGL_NO_CONTEXT) {
-        std::fprintf(stderr, "Error: eglCreateContext falló.\n");
-        return false;
-    }
+    EGLint ctxAttribs[] = { EGL_CONTEXT_MAJOR_VERSION, 2,
+                            EGL_CONTEXT_MINOR_VERSION, 1, EGL_NONE };
+    s->egl_context = eglCreateContext(s->egl_display, config, EGL_NO_CONTEXT, ctxAttribs);
+    if (s->egl_context == EGL_NO_CONTEXT) return false;
 
     s->egl_window = wl_egl_window_create(s->surface, width, height);
-    if (!s->egl_window) {
-        std::fprintf(stderr, "Error: wl_egl_window_create falló.\n");
-        return false;
-    }
+    if (!s->egl_window) return false;
 
-    s->egl_surface = eglCreateWindowSurface(s->egl_display, config,
-                                            s->egl_window, nullptr);
-    if (s->egl_surface == EGL_NO_SURFACE) {
-        std::fprintf(stderr, "Error: eglCreateWindowSurface falló.\n");
-        return false;
-    }
+    s->egl_surface = eglCreateWindowSurface(s->egl_display, config, s->egl_window, nullptr);
+    if (s->egl_surface == EGL_NO_SURFACE) return false;
 
-    eglMakeCurrent(s->egl_display, s->egl_surface, s->egl_surface,
-                   s->egl_context);
+    eglMakeCurrent(s->egl_display, s->egl_surface, s->egl_surface, s->egl_context);
     eglSwapInterval(s->egl_display, 1);
-
     return true;
 }
 
-// ---- Inicialización Wayland completa --------------------------------------
-static bool init_wayland(WaylandState* s) {
+static bool initWayland(WaylandState* s) {
     s->display = wl_display_connect(nullptr);
-    if (!s->display) {
-        std::fprintf(stderr, "Error: no se pudo conectar al display Wayland.\n");
-        return false;
-    }
+    if (!s->display) { std::fprintf(stderr, "No se pudo conectar a Wayland.\n"); return false; }
 
     s->registry = wl_display_get_registry(s->display);
     wl_registry_add_listener(s->registry, &registry_listener, s);
     wl_display_roundtrip(s->display);
 
     if (!s->compositor || !s->layer_shell || !s->shm) {
-        std::fprintf(stderr, "Error: faltan interfaces de Wayland necesarias.\n");
-        return false;
+        std::fprintf(stderr, "Faltan interfaces de Wayland.\n"); return false;
     }
 
-    if (s->seat) {
-        wl_seat_add_listener(s->seat, &seat_listener, s);
-    }
+    if (s->seat) wl_seat_add_listener(s->seat, &seat_listener, s);
 
-    // Cargar cursor por defecto.
     s->cursor_theme = wl_cursor_theme_load(nullptr, 24, s->shm);
     if (s->cursor_theme) {
         s->cursor = wl_cursor_theme_get_cursor(s->cursor_theme, "default");
-        if (s->cursor) {
-            s->cursor_surface = wl_compositor_create_surface(s->compositor);
-        }
+        if (s->cursor) s->cursor_surface = wl_compositor_create_surface(s->compositor);
     }
 
     s->surface = wl_compositor_create_surface(s->compositor);
-
     s->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
-        s->layer_shell,
-        s->surface,
-        s->output,
-        ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
-        "whip_overlay");
+        s->layer_shell, s->surface, s->output,
+        ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "whip_overlay");
 
     zwlr_layer_surface_v1_set_size(s->layer_surface, 0, 0);
     zwlr_layer_surface_v1_set_anchor(s->layer_surface,
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP | ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+        ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT | ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
     zwlr_layer_surface_v1_set_exclusive_zone(s->layer_surface, -1);
     zwlr_layer_surface_v1_set_keyboard_interactivity(s->layer_surface,
         ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
-
-    zwlr_layer_surface_v1_add_listener(s->layer_surface,
-                                       &layer_surface_listener, s);
+    zwlr_layer_surface_v1_add_listener(s->layer_surface, &layer_listener, s);
     wl_surface_commit(s->surface);
 
-    // Esperar configure
     while (!s->configured && !s->closed) {
-        if (wl_display_dispatch(s->display) == -1) {
-            std::fprintf(stderr, "Error: dispatch falló esperando configure.\n");
-            return false;
-        }
+        if (wl_display_dispatch(s->display) == -1) return false;
     }
+    if (s->closed) return false;
 
-    if (s->closed) {
-        return false;
-    }
-
-    // Aplicar tamaño configurado.
     zwlr_layer_surface_v1_ack_configure(s->layer_surface, s->configure_serial);
     wl_surface_commit(s->surface);
 
@@ -832,94 +625,101 @@ static bool init_wayland(WaylandState* s) {
         g_screenH = s->pending_h;
     }
 
-    if (!init_egl(s, g_screenW, g_screenH)) {
-        return false;
-    }
-
-    return true;
+    return initEGL(s, g_screenW, g_screenH);
 }
 
-static void cleanup_wayland(WaylandState* s) {
+static void cleanupWayland(WaylandState* s) {
     if (s->egl_display != EGL_NO_DISPLAY) {
-        eglMakeCurrent(s->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE,
-                       EGL_NO_CONTEXT);
+        eglMakeCurrent(s->egl_display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT);
     }
-    if (s->egl_surface != EGL_NO_SURFACE) {
-        eglDestroySurface(s->egl_display, s->egl_surface);
+    if (s->egl_surface != EGL_NO_SURFACE) eglDestroySurface(s->egl_display, s->egl_surface);
+    if (s->egl_window) wl_egl_window_destroy(s->egl_window);
+    if (s->egl_context != EGL_NO_CONTEXT) eglDestroyContext(s->egl_display, s->egl_context);
+    if (s->egl_display != EGL_NO_DISPLAY) eglTerminate(s->egl_display);
+    if (s->layer_surface) zwlr_layer_surface_v1_destroy(s->layer_surface);
+    if (s->surface) wl_surface_destroy(s->surface);
+    if (s->cursor_surface) wl_surface_destroy(s->cursor_surface);
+    if (s->cursor_theme) wl_cursor_theme_destroy(s->cursor_theme);
+    if (s->pointer) wl_pointer_destroy(s->pointer);
+    if (s->seat) wl_seat_destroy(s->seat);
+    if (s->output) wl_output_destroy(s->output);
+    if (s->layer_shell) zwlr_layer_shell_v1_destroy(s->layer_shell);
+    if (s->shm) wl_shm_destroy(s->shm);
+    if (s->compositor) wl_compositor_destroy(s->compositor);
+    if (s->registry) wl_registry_destroy(s->registry);
+    if (s->display) wl_display_disconnect(s->display);
+}
+
+static void updateInputRegion(WaylandState* s,
+                              const std::vector<Vec2>& pos,
+                              const Vec2& grip) {
+    if (!s->compositor || !s->surface) return;
+
+    float minX = grip.x, minY = grip.y;
+    float maxX = grip.x, maxY = grip.y;
+
+    for (const auto& p : pos) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y > maxY) maxY = p.y;
     }
-    if (s->egl_window) {
-        wl_egl_window_destroy(s->egl_window);
+
+    float ca = std::cos(HANDLE_ANGLE);
+    float sa = std::sin(HANDLE_ANGLE);
+    float px = -sa * HANDLE_WIDTH * 0.5f;
+    float py =  ca * HANDLE_WIDTH * 0.5f;
+    float tipX = grip.x + HANDLE_LEN * ca;
+    float tipY = grip.y + HANDLE_LEN * sa;
+
+    Vec2 corners[4] = {
+        { grip.x + px, grip.y + py },
+        { grip.x - px, grip.y - py },
+        { tipX  + px, tipY  + py },
+        { tipX  - px, tipY  - py }
+    };
+    for (const auto& c : corners) {
+        if (c.x < minX) minX = c.x;
+        if (c.y < minY) minY = c.y;
+        if (c.x > maxX) maxX = c.x;
+        if (c.y > maxY) maxY = c.y;
     }
-    if (s->egl_context != EGL_NO_CONTEXT) {
-        eglDestroyContext(s->egl_display, s->egl_context);
-    }
-    if (s->egl_display != EGL_NO_DISPLAY) {
-        eglTerminate(s->egl_display);
-    }
-    if (s->layer_surface) {
-        zwlr_layer_surface_v1_destroy(s->layer_surface);
-    }
-    if (s->surface) {
-        wl_surface_destroy(s->surface);
-    }
-    if (s->cursor_surface) {
-        wl_surface_destroy(s->cursor_surface);
-    }
-    if (s->cursor_theme) {
-        wl_cursor_theme_destroy(s->cursor_theme);
-    }
-    if (s->pointer) {
-        wl_pointer_destroy(s->pointer);
-    }
-    if (s->seat) {
-        wl_seat_destroy(s->seat);
-    }
-    if (s->output) {
-        wl_output_destroy(s->output);
-    }
-    if (s->layer_shell) {
-        zwlr_layer_shell_v1_destroy(s->layer_shell);
-    }
-    if (s->shm) {
-        wl_shm_destroy(s->shm);
-    }
-    if (s->compositor) {
-        wl_compositor_destroy(s->compositor);
-    }
-    if (s->registry) {
-        wl_registry_destroy(s->registry);
-    }
-    if (s->display) {
-        wl_display_disconnect(s->display);
+
+    static const float MARGIN = 20.0f;
+    minX -= MARGIN; minY -= MARGIN;
+    maxX += MARGIN; maxY += MARGIN;
+
+    int x = static_cast<int>(minX);
+    int y = static_cast<int>(minY);
+    int w = static_cast<int>(maxX - minX);
+    int h = static_cast<int>(maxY - minY);
+    if (w <= 0) w = 1;
+    if (h <= 0) h = 1;
+
+    wl_region* region = wl_compositor_create_region(s->compositor);
+    if (region) {
+        wl_region_add(region, x, y, w, h);
+        wl_surface_set_input_region(s->surface, region);
+        wl_region_destroy(region);
     }
 }
 
-static int run_wayland() {
-#ifndef _WIN32
+static int runWayland() {
     initLinuxAudio();
-    // Generar un WAV de prueba silenciosamente si no existe uno propio.
-    if (!std::filesystem::exists("crack.wav")) {
-        generateTestWav("crack.wav");
-    }
-#endif
+    if (!std::filesystem::exists("crack.wav")) generateTestWav("crack.wav");
 
-    if (!init_wayland(&g_wl)) {
-        return -1;
-    }
-
-    setup_gl_state();
+    if (!initWayland(&g_wl)) return -1;
+    setupGL();
 
     std::vector<Vec2> pos, prev;
     initWhip(pos, prev);
 
-    // Inicializar datos de hit-test antes de que lleguen eventos de ratón.
     g_whipPos = pos;
-    g_handleGrip.x = pos[0].x - HANDLE_LEN * std::cos(HANDLE_ANGLE);
-    g_handleGrip.y = pos[0].y - HANDLE_LEN * std::sin(HANDLE_ANGLE);
+    g_handleGrip = computeGrip(Vec2{g_mouseX, g_mouseY}, pos[0], false);
 
-    bool  armed         = false;
+    bool  armed = false;
     float crackCooldown = 0.0f;
-    double lastTime     = 0.0;
+    double lastTime = 0.0;
 
     while (!g_wl.closed) {
         wl_display_dispatch_pending(g_wl.display);
@@ -927,105 +727,82 @@ static int run_wayland() {
 
         double now = 0.0;
         struct timespec ts;
-        if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0) {
+        if (clock_gettime(CLOCK_MONOTONIC, &ts) == 0)
             now = ts.tv_sec + ts.tv_nsec * 1e-9;
-        }
+
         float dt = static_cast<float>(now - lastTime);
         lastTime = now;
         if (dt > 0.05f) dt = 0.05f;
         if (dt < 0.001f) dt = 0.001f;
 
-        Vec2 mouse = { g_mouseX, g_mouseY };
+        Vec2 mouse{ g_mouseX, g_mouseY };
         updatePhysics(pos, prev, mouse, g_dragging, dt);
         detectCrack(pos, prev, dt, crackCooldown, armed);
 
-        // Guardar posiciones actuales para la detección de clicks.
         g_whipPos = pos;
+        Vec2 grip = computeGrip(mouse, pos[0], g_dragging);
+        g_handleGrip = grip;
 
         glViewport(0, 0, g_screenW, g_screenH);
         glClear(GL_COLOR_BUFFER_BIT);
-
         renderWhip(pos);
-
-        Vec2 grip;
-        if (g_dragging) {
-            grip = mouse;
-        } else {
-            grip.x = pos[0].x - HANDLE_LEN * std::cos(HANDLE_ANGLE);
-            grip.y = pos[0].y - HANDLE_LEN * std::sin(HANDLE_ANGLE);
-        }
-        g_handleGrip = grip;
         renderHandle(grip);
+        updateInputRegion(&g_wl, pos, grip);
 
         eglSwapBuffers(g_wl.egl_display, g_wl.egl_surface);
     }
 
-    cleanup_wayland(&g_wl);
+    cleanupWayland(&g_wl);
     return 0;
 }
 
 #endif // USE_WAYLAND_LAYER
 
 // ===========================================================================
-//  PLATAFORMA: GLFW (Windows)
+//  Windows (GLFW)
 // ===========================================================================
 #ifdef USE_GLFW
 
-static void mouseButtonCallback(GLFWwindow* /*window*/, int button, int action, int /*mods*/) {
+static void mouseButtonCallback(GLFWwindow*, int button, int action, int) {
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
-        if (action == GLFW_PRESS) {
-            g_dragging = isMouseOverObject(g_mouseX, g_mouseY);
-        } else {
-            g_dragging = false;
-        }
+        if (action == GLFW_PRESS) g_dragging = isMouseOverObject(g_mouseX, g_mouseY);
+        else                       g_dragging = false;
     }
 }
 
-static int run_glfw() {
-    if (!glfwInit()) {
-        std::fprintf(stderr, "Error: no se pudo inicializar GLFW.\n");
-        return -1;
-    }
+static int runGLFW() {
+    if (!glfwInit()) { std::fprintf(stderr, "Error inicializando GLFW.\n"); return -1; }
 
     glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
     glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
     glfwWindowHint(GLFW_SAMPLES, 4);
 
-    GLFWwindow* window = glfwCreateWindow(g_screenW, g_screenH,
-                                          "whip_simulator", nullptr, nullptr);
-    if (!window) {
-        std::fprintf(stderr, "Error: no se pudo crear la ventana.\n");
-        glfwTerminate();
-        return -1;
-    }
+    GLFWwindow* window = glfwCreateWindow(g_screenW, g_screenH, "whip", nullptr, nullptr);
+    if (!window) { glfwTerminate(); return -1; }
 
 #ifdef _WIN32
     HWND hwnd = glfwGetWin32Window(window);
     if (hwnd) {
-        LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-        exStyle |= WS_EX_LAYERED | WS_EX_TOPMOST;
-        SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
+        LONG_PTR ex = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
+        SetWindowLongPtr(hwnd, GWL_EXSTYLE, ex | WS_EX_LAYERED | WS_EX_TOPMOST);
     }
 #endif
 
     glfwSetMouseButtonCallback(window, mouseButtonCallback);
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
-
-    setup_gl_state();
+    setupGL();
 
     std::vector<Vec2> pos, prev;
     initWhip(pos, prev);
 
-    // Inicializar datos de hit-test antes de que lleguen eventos de ratón.
     g_whipPos = pos;
-    g_handleGrip.x = pos[0].x - HANDLE_LEN * std::cos(HANDLE_ANGLE);
-    g_handleGrip.y = pos[0].y - HANDLE_LEN * std::sin(HANDLE_ANGLE);
+    g_handleGrip = computeGrip(Vec2{0.0f, 0.0f}, pos[0], false);
 
-    bool  armed         = false;
+    bool  armed = false;
     float crackCooldown = 0.0f;
-    double lastTime     = glfwGetTime();
+    double lastTime = glfwGetTime();
 
     while (!glfwWindowShouldClose(window)) {
         double now = glfwGetTime();
@@ -1037,27 +814,18 @@ static int run_glfw() {
         glfwGetCursorPos(window, &mx, &my);
         g_mouseX = static_cast<float>(mx);
         g_mouseY = static_cast<float>(my);
-        Vec2 mouse = { g_mouseX, g_mouseY };
+        Vec2 mouse{ g_mouseX, g_mouseY };
 
         updatePhysics(pos, prev, mouse, g_dragging, dt);
         detectCrack(pos, prev, dt, crackCooldown, armed);
 
-        // Guardar posiciones actuales para la detección de clicks.
         g_whipPos = pos;
+        Vec2 grip = computeGrip(mouse, pos[0], g_dragging);
+        g_handleGrip = grip;
 
         glViewport(0, 0, g_screenW, g_screenH);
         glClear(GL_COLOR_BUFFER_BIT);
-
         renderWhip(pos);
-
-        Vec2 grip;
-        if (g_dragging) {
-            grip = mouse;
-        } else {
-            grip.x = pos[0].x - HANDLE_LEN * std::cos(HANDLE_ANGLE);
-            grip.y = pos[0].y - HANDLE_LEN * std::sin(HANDLE_ANGLE);
-        }
-        g_handleGrip = grip;
         renderHandle(grip);
 
         glfwSwapBuffers(window);
@@ -1072,12 +840,12 @@ static int run_glfw() {
 #endif // USE_GLFW
 
 // ---------------------------------------------------------------------------
-//  PROGRAMA PRINCIPAL
+//  Entry point
 // ---------------------------------------------------------------------------
 int main() {
 #ifdef USE_WAYLAND_LAYER
-    return run_wayland();
+    return runWayland();
 #else
-    return run_glfw();
+    return runGLFW();
 #endif
 }
