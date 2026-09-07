@@ -1,0 +1,3 @@
+/home/erik/Whipt/build/CMakeFiles/whip_simulator.dir
+/home/erik/Whipt/build/CMakeFiles/edit_cache.dir
+/home/erik/Whipt/build/CMakeFiles/rebuild_cache.dir
